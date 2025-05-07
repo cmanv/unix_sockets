@@ -6,50 +6,49 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <string.h>
+
 #include "uds.h"
 #include "config.h"
 
 //#include <sys/ioctl.h>
 
-
 static Tcl_ChannelType unix_socket_channel_type = {
 	"unix_socket",
-	TCL_CHANNEL_VERSION_2,
-	closeProc,
+	TCL_CHANNEL_VERSION_5,
+	NULL,	//closeProc
 	inputProc,
 	outputProc,
-	NULL,	//seekProc				// NULLable
+	NULL,	//seekProc			// NULLable
 	NULL,	//setOptionProc			// NULLable
 	NULL,	//getOptionProc			// NULLable
 	watchProc,
 	getHandleProc,
-	NULL,	//close2Proc			// NULLable
-	blockModeProc,					// NULLable
-	NULL,	//flushProc				// NULLable
+	close2Proc,
+	blockModeProc,				// NULLable
+	NULL,	//flushProc			// NULLable
 	NULL,	//handlerProc			// NULLable
 	NULL,	//wideSeekProc			// NULLable if seekProc is NULL
 	NULL,	//threadActionProc		// NULLable
 	NULL,	//truncateProc			// NULLable
 };
 
-
 typedef struct uds_state {
-	Tcl_Interp *	interp;
-	Tcl_Channel		channel;
-	char			name[64];
-	int				fd;
-	Tcl_Obj *		accept_handler;
-	Tcl_Obj *		path;
+	Tcl_Interp 	*interp;
+	Tcl_Channel	 channel;
+	char		 name[64];
+	int		 fd;
+	Tcl_Obj		*accept_handler;
+	Tcl_Obj		*path;
 } uds_state;
 
-
-static int closeProc(cdata, interp) //<<<
-	ClientData		cdata;
-	Tcl_Interp		*interp;
+static int close2Proc(ClientData cdata, Tcl_Interp *interp, int flags)
 {
 	uds_state *	con = (uds_state *)cdata;
 
 	//fprintf(stderr, "closeProc(%s)\n", con->name);
+	if (flags&(TCL_CLOSE_READ|TCL_CLOSE_WRITE))
+		return EINVAL;
 
 	Tcl_DeleteFileHandler(con->fd);
 
@@ -70,12 +69,7 @@ static int closeProc(cdata, interp) //<<<
 	return 0;
 }
 
-//>>>
-static int inputProc(cdata, buf, bufSize, errorCodePtr) //<<<
-	ClientData	cdata;
-	char		*buf;
-	int			bufSize;
-	int *		errorCodePtr;
+static int inputProc(ClientData cdata, char *buf, int bufSize, int *errorCodePtr)
 {
 	int			got;
 	uds_state *	con = (uds_state *)cdata;
@@ -88,12 +82,7 @@ static int inputProc(cdata, buf, bufSize, errorCodePtr) //<<<
 	return got;
 }
 
-//>>>
-static int outputProc(cdata, buf, toWrite, errorCodePtr) //<<<
-	ClientData		cdata;
-	const char *	buf;
-	int				toWrite;
-	int *			errorCodePtr;
+static int outputProc(ClientData cdata, const char *buf, int toWrite, int *errorCodePtr)
 {
 	int			wrote;
 	uds_state *	con = (uds_state *)cdata;
@@ -105,10 +94,7 @@ static int outputProc(cdata, buf, toWrite, errorCodePtr) //<<<
 	return wrote;
 }
 
-//>>>
-static int blockModeProc(cdata, mode) //<<<
-	ClientData		cdata;
-	int				mode;
+static int blockModeProc(ClientData cdata, int mode)
 {
 	uds_state *	con = (uds_state *)cdata;
 	int			flags, err;
@@ -137,10 +123,7 @@ static int blockModeProc(cdata, mode) //<<<
 	return 0;
 }
 
-//>>>
-static void watchProc(cdata, mask) //<<<
-	ClientData		cdata;
-	int				mask;
+static void watchProc(ClientData cdata, int mask)
 {
 	uds_state *	con = (uds_state *)cdata;
 
@@ -152,11 +135,7 @@ static void watchProc(cdata, mask) //<<<
 	}
 }
 
-//>>>
-static int getHandleProc(cdata, direction, handlePtr) //<<<
-	ClientData		cdata;
-	int				direction;
-	ClientData *	handlePtr;
+static int getHandleProc(ClientData cdata, int direction, ClientData *handlePtr)
 {
 	uds_state *	con = (uds_state *)cdata;
 
@@ -166,15 +145,12 @@ static int getHandleProc(cdata, direction, handlePtr) //<<<
 	return TCL_OK;
 }
 
-//>>>
-static void accept_dispatcher(cdata, mask) //<<<
-	ClientData		cdata;
-	int				mask;
+static void accept_dispatcher(ClientData cdata, int mask)
 {
 	uds_state *			state = (uds_state *)cdata;
-	struct sockaddr_un	client_address;
-	int					client_sockfd;
-	int					res;
+	struct sockaddr_un		client_address;
+	int				client_sockfd;
+	int				res;
 	socklen_t			client_len;
 	char				channel_name[64];
 	Tcl_Obj *			handler;
@@ -218,29 +194,24 @@ static void accept_dispatcher(cdata, mask) //<<<
 	if (res != TCL_OK) Tcl_BackgroundError(state->interp);
 }
 
-//>>>
-static int glue_listen(cdata, interp, objc, objv) //<<<
-	ClientData		cdata;
-	Tcl_Interp *	interp;
-	int				objc;
-	Tcl_Obj *CONST	objv[];
+static int glue_listen(ClientData cdata, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
-	int					server_sockfd, server_len;
+	int			server_sockfd, server_len;
 	struct sockaddr_un	server_address;
-	char *				path;
-	int					path_len;
-	uds_state *			state;
-	char				channel_name[64];
-	Tcl_Channel			channel;
+	char *			path;
+	long			path_len;
+	uds_state *		state;
+	char			channel_name[64];
+	Tcl_Channel		channel;
 
 	CHECK_ARGS(2, "path accept_handler");
 	path = Tcl_GetStringFromObj(objv[1], &path_len);
-	// Hey, I didn't write it.
-	if (path_len > 107) THROW_ERROR("path cannot exceed 107 characters");
+	if (path_len > SUNPATHLEN)
+		THROW_ERROR("path cannot exceed ", SUNPATHLEN, " characters");
 
 	server_sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
 	server_address.sun_family = AF_UNIX;
-	strncpy(server_address.sun_path, path, 107);
+	strncpy(server_address.sun_path, path, SUNPATHLEN);
 	server_len = sizeof(server_address);		// should this be SUN_LEN()?
 	unlink(server_address.sun_path);
 	bind(server_sockfd, (struct sockaddr *)&server_address, server_len);
@@ -272,26 +243,22 @@ static int glue_listen(cdata, interp, objc, objv) //<<<
 	return TCL_OK;
 }
 
-//>>>
-static int glue_connect(cdata, interp, objc, objv) //<<<
-	ClientData		cdata;
-	Tcl_Interp *	interp;
-	int				objc;
-	Tcl_Obj *CONST	objv[];
+static int glue_connect(ClientData cdata, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
-	Tcl_Channel			channel;
-	int					fd;
-	char				channel_name[64];
-	char *				path;
-	int					path_len, result;
+	Tcl_Channel		channel;
+	int			fd;
+	char			channel_name[64];
+	char *			path;
+	long			path_len, result;
 	struct sockaddr_un	address;
-	int					sockaddr_len;
-	uds_state *			con;
+	int			sockaddr_len;
+	uds_state *		con;
 
 	CHECK_ARGS(1, "path");
 	path = Tcl_GetStringFromObj(objv[1], &path_len);
 	// Hey, I didn't write it.
-	if (path_len > 107) THROW_ERROR("path cannot exceed 107 characters");
+	if (path_len > SUNPATHLEN)
+		THROW_ERROR("path cannot exceed ", SUNPATHLEN, " characters");
 
 	fd = socket(AF_UNIX, SOCK_STREAM, 0);
 
@@ -327,10 +294,9 @@ static int glue_connect(cdata, interp, objc, objv) //<<<
 	return TCL_OK;
 }
 
-//>>>
-int Unix_sockets_Init(Tcl_Interp *interp) //<<<
+int unix_sockets_Init(Tcl_Interp *interp)
 {
-	if (Tcl_InitStubs(interp, "8.2", 0) == NULL)
+	if (Tcl_InitStubs(interp, TCL_VERSION, 0) == NULL)
 		return TCL_ERROR;
 
 	NEW_CMD("unix_sockets::listen", glue_listen);
@@ -340,7 +306,3 @@ int Unix_sockets_Init(Tcl_Interp *interp) //<<<
 
 	return TCL_OK;
 }
-
-//>>>
-
-// vim: foldmethod=marker foldmarker=<<<,>>> ts=4 shiftwidth=4
